@@ -18,6 +18,15 @@ fn main() {
                 let first_line = request.lines().next().unwrap_or("");
                 let path = first_line.split_whitespace().nth(1).unwrap_or("");
 
+
+                let mut user_agent = "";
+                for line in request.lines() {
+                    if let Some(_val) = line.to_ascii_lowercase().strip_prefix("user-agent:") {
+                        user_agent = line["user-agent:".len()..].trim();
+                        break;
+                    }
+                }
+
                 let response = if path == "/" {
                     "HTTP/1.1 200 OK\r\n\r\n".to_string()
                 } else if let Some(echo_str) = path.strip_prefix("/echo/") {
@@ -25,6 +34,12 @@ fn main() {
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
                         echo_str.len(),
                         echo_str
+                    )
+                } else if path == "/user-agent" {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        user_agent.len(),
+                        user_agent
                     )
                 } else {
                     "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
