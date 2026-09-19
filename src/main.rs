@@ -36,7 +36,7 @@ fn main() {
 
                     let first_line = request.lines().next().unwrap_or("");
                     let path = first_line.split_whitespace().nth(1).unwrap_or("");
-
+                    let method = first_line.split_whitespace().nth(0).unwrap_or("");
 
                     let mut user_agent = "";
                     for line in request.lines() {
@@ -46,7 +46,38 @@ fn main() {
                         }
                     }
 
-                    let response = if path == "/" {
+                    let mut content_length: usize = 0;
+                    for line in request.lines() {
+                        if let Some(val) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            content_length = val.trim().parse().unwrap_or(0);
+                            break;
+                        }
+                    }
+
+                    // Find where headers end in raw bytes
+                    let header_end = request.find("\r\n\r\n").map(|i| i + 4).unwrap_or(bytes_read);
+                    let mut body = buf[header_end..bytes_read].to_vec();
+
+                    while body.len() < content_length {
+                        let mut chunk = [0u8; 1024];
+                        match stream.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(n) => body.extend_from_slice(&chunk[..n]),
+                            Err(_) => break,
+                        }
+                    }
+
+                    let response = if method == "POST" {
+                        if let Some(filename) = path.strip_prefix("/files/") {
+                            let file_path = Path::new(&dir).join(filename);
+                            match fs::write(file_path, &body) {
+                                Ok(_) => "HTTP/1.1 201 Created\r\n\r\n".to_string(),
+                                Err(_) => "HTTP/1.1 500 Internal Server Error\r\n\r\n".to_string(),
+                            }
+                        } else {
+                            "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
+                        }
+                    } else if path == "/" {
                         "HTTP/1.1 200 OK\r\n\r\n".to_string()
                     } else if let Some(echo_str) = path.strip_prefix("/echo/") {
                         format!(
