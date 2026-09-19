@@ -18,9 +18,16 @@ fn main() {
                 let first_line = request.lines().next().unwrap_or("");
                 let path = first_line.split_whitespace().nth(1).unwrap_or("");
 
-                let response = match path {
-                    "/" => "HTTP/1.1 200 OK\r\n\r\n",
-                    _ => "HTTP/1.1 404 Not Found\r\n\r\n",
+                let response = if path == "/" {
+                    "HTTP/1.1 200 OK\r\n\r\n".to_string()
+                } else if let Some(echo_str) = path.strip_prefix("/echo/") {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        echo_str.len(),
+                        echo_str
+                    )
+                } else {
+                    "HTTP/1.1 404 Not Found\r\n\r\n".to_string()
                 };
 
                 let _ = stream.write_all(response.as_bytes());
