@@ -26,6 +26,10 @@ pub fn parse_request<T: Read>(stream: &mut T) -> Option<Request> {
     // raw bytes are used separately for the body (binary-safe).
     let head_str = String::from_utf8_lossy(&buf[..bytes_read]);
 
+    // Pretty-printed request
+    let lines: Vec<&str> = head_str.lines().collect();
+    println!("Request lines: {:#?}", lines);
+
     // 2. Parse request line: "GET /path HTTP/1.1"
     let first_line = head_str.lines().next().unwrap_or("");
     let mut parts = first_line.split_whitespace();

@@ -2,13 +2,11 @@ mod request;
 mod response;
 mod router;
 
-use std::io::{Read, Write};
+use std::io::{Write};
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::thread;
 use std::env;
-use std::fs;
-use std::path::Path;
 
 fn main() {
     println!("Redis Server listening here with port {}!!!", 4221);

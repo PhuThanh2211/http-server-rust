@@ -1,5 +1,8 @@
 use std::fs::{read, write};
+use std::io::Write;
 use std::path::Path;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use crate::{request::Request, response};
 
 pub fn route(req: &Request, dir: &str) -> Vec<u8> {
@@ -18,13 +21,23 @@ fn handle_echo(text: &str, req: &Request) -> Vec<u8> {
         .map(|v| v.split(',').any(|s| s.trim() == "gzip"))
         .unwrap_or(false);
 
-    let encoding = if support_gzip {
-        Some("gzip")
+    if support_gzip {
+        let compressed = gzip_compress(text.as_bytes());
+        response::ok_with_encoding("text/plain", &compressed, Some("gzip"))
     } else {
-        None
-    };
+        response::ok_with_encoding("text/plain", text.as_bytes(), None)
+    }
+}
 
-    response::ok_with_encoding("text/plain", text.as_bytes(), encoding)
+fn gzip_compress(data: &[u8]) -> Vec<u8> {
+    // Creates an in-memory gzip writer
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+
+    // Feeds the raw string bytes through the compressor
+    encoder.write_all(data).unwrap();
+
+    // Flushes and returns the complete gzip byte stream (header + compressed data + checksum/trailer)
+    encoder.finish().unwrap()
 }
 
 fn handle_user_agent(req: &Request) -> Vec<u8> {
