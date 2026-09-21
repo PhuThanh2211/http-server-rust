@@ -7,6 +7,7 @@ use std::io::{Write};
 use std::net::TcpListener;
 use std::thread;
 use std::env;
+use std::net::Shutdown;
 
 fn main() {
     println!("Redis Server listening here with port {}!!!", 4221);
@@ -29,7 +30,11 @@ fn main() {
                             .map(|v| v.eq_ignore_ascii_case("close"))
                             .unwrap_or(false);
 
-                        let response = router::route(&req, &dir);
+                        let mut response = router::route(&req, &dir);
+                        if should_close {
+                            response = response::add_header(response, "Connection: close");
+                        }
+
                         if stream.write_all(&response).is_err() {
                             break;
                         }
@@ -37,6 +42,9 @@ fn main() {
                         let _ = stream.flush();
 
                         if should_close {
+                            // explicitly closes both read/write halves of the TCP connection immediately
+                            // after sending the response
+                            let _ = stream.shutdown(Shutdown::Both);
                             break;
                         }
                     }

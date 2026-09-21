@@ -54,7 +54,7 @@ fn handle_get_file(filename: &str, dir: &str) -> Vec<u8> {
 
 fn handle_post_file(filename: &str, dir: &str, body: &[u8]) -> Vec<u8> {
     match write(Path::new(dir).join(filename), body) {
-        Ok(contents) => response::created(),
+        Ok(_contents) => response::created(),
         Err(_) => response::server_error(),
     }
 }
