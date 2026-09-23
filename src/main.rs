@@ -1,6 +1,8 @@
 mod request;
 mod response;
 mod router;
+mod logging;
+mod static_files;
 
 use std::io::{Write};
 #[allow(unused_imports)]
@@ -8,6 +10,7 @@ use std::net::TcpListener;
 use std::thread;
 use std::env;
 use std::net::Shutdown;
+use std::time::Instant;
 
 fn main() {
     println!("Redis Server listening here with port {}!!!", 4221);
@@ -19,8 +22,14 @@ fn main() {
         match stream {
             Ok(mut stream) => {
                 let dir = directory.clone();
+                let peer_ip = stream.peer_addr()
+                    .map(|a| a.ip().to_string())
+                    .unwrap_or_else(|_| "-".to_string());
+
                 thread::spawn(move || {
                     loop {
+                        let start = Instant::now();
+
                         let req = match request::parse_request(&mut stream) {
                             Some(r) => r,
                             None => break, // Connection closed or no data
@@ -34,6 +43,23 @@ fn main() {
                         if should_close {
                             response = response::add_header(response, "Connection: close");
                         }
+
+                        // --- Access log line, right before writing the response ---
+                        let status = logging::extract_status(&response);
+                        let bytes = logging::extract_body_length(&response);
+                        let latency_ms = start.elapsed().as_millis();
+                        let user_agent = req.header("user-agent").unwrap_or("-");
+
+                        logging::log_request(&logging::LogEntry {
+                            ip: peer_ip.clone(),
+                            method: &req.method,
+                            path: &req.path,
+                            version: &req.version,
+                            status,
+                            bytes,
+                            user_agent,
+                            latency_ms
+                        });
 
                         if stream.write_all(&response).is_err() {
                             break;

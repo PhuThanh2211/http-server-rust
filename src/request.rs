@@ -4,13 +4,22 @@ use std::io::Read;
 pub struct Request {
     pub method: String,
     pub path: String,
+    pub version: String,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+    pub query: Vec<(String, String)>, // preserves original left-to-right order; duplicates allowed
 }
 
 impl Request {
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(&name.to_ascii_lowercase()).map(|s| s.as_str())
+    }
+
+    /// Duplicate-key policy: last occurrence wins.
+    pub fn query_get(&self, name: &str) -> Option<&str> {
+        self.query.iter().rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -30,11 +39,18 @@ pub fn parse_request<T: Read>(stream: &mut T) -> Option<Request> {
     let lines: Vec<&str> = head_str.lines().collect();
     println!("Request lines: {:#?}", lines);
 
-    // 2. Parse request line: "GET /path HTTP/1.1"
+    // 2. Parse request line: "GET /users/alice/posts/abc-123 HTTP/1.1"
+    // "GET /search?q=cron&limit=10 HTTP/1.1"
     let first_line = head_str.lines().next().unwrap_or("");
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
-    let path = parts.next().unwrap_or("").to_string();
+    let raw_path = parts.next().unwrap_or("");
+    let version = parts.next().unwrap_or("HTTP/1.1").to_string();
+
+    let mut path_and_query = raw_path.splitn(2, '?');
+    let path = path_and_query.next().unwrap_or("").to_string();
+    let query_str = path_and_query.next().unwrap_or("");
+    let query = parse_query(query_str);
 
     // 3. Parse headers into a HashMap (lowercase keys for case-insensitivity)
     let mut headers = HashMap::new();
@@ -70,6 +86,63 @@ pub fn parse_request<T: Read>(stream: &mut T) -> Option<Request> {
     }
 
     Some(Request {
-        method, path, headers, body
+        method, path, version, headers, body, query
     })
+}
+
+fn parse_query(qs: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    if qs.is_empty() {
+        return pairs;
+    }
+
+    for pair in qs.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+
+        let mut kv = pair.splitn(2, '=');
+        let raw_key = kv.next().unwrap_or("");
+        let raw_val = kv.next().unwrap_or("");
+        pairs.push((percent_decode(raw_key), percent_decode(raw_val)));
+    }
+
+    pairs
+}
+
+fn percent_decode(s: &str) -> String {
+    // q=hello%20world → hello world
+    // + also means space in query strings
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            },
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    Err(_) => {
+                        // malformed %XX, keep literal
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&out).to_string()
 }
