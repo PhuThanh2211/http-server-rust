@@ -4,29 +4,64 @@ mod router;
 mod logging;
 mod static_files;
 
-use std::io::{Write};
+use std::io::{ErrorKind, Write};
 #[allow(unused_imports)]
 use std::net::TcpListener;
-use std::thread;
+use std::{panic, thread};
 use std::env;
 use std::net::Shutdown;
-use std::time::Instant;
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 fn main() {
     println!("Redis Server listening here with port {}!!!", 4221);
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+
+    // Non-blocking accept loop: periodically check the shutdown flag
+    // even when no new connection has arrived yet.
+    listener.set_nonblocking(true).unwrap();
+
     let directory = parse_directory_args();
 
+    // Shared flag: false = running normally, true = shutting down.
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    {
+        let flag = shutting_down.clone();
+        ctrlc::set_handler(move || {
+            println!("\nShutdown signal received. Finishing in-flight requests...");
+            flag.store(true, Ordering::SeqCst);
+        }).expect("Error setting Ctrl+C handler");
+    }
+
+    // Track spawned threads so we can wait for them to finish before exiting.
+    let mut handles = Vec::new();
+
     for stream in listener.incoming() {
+        if shutting_down.load(Ordering::SeqCst) {
+            println!("Shutting down: no longer accepting new connections.");
+            break;
+        }
+
         match stream {
             Ok(mut stream) => {
+                // set_nonblocking on the listener makes accept() non-blocking;
+                // reset the per-connection stream back to blocking so read()/write()
+                // behave normally for the rest of the request handling.
+                let _ = stream.set_nonblocking(false);
+
+                // If no data arrives within 30s, .read() returns an error
+                // instead of blocking the thread forever.
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+
                 let dir = directory.clone();
                 let peer_ip = stream.peer_addr()
                     .map(|a| a.ip().to_string())
                     .unwrap_or_else(|_| "-".to_string());
 
-                thread::spawn(move || {
+                let handle = thread::spawn(move || {
                     loop {
                         let start = Instant::now();
 
@@ -39,7 +74,16 @@ fn main() {
                             .map(|v| v.eq_ignore_ascii_case("close"))
                             .unwrap_or(false);
 
-                        let mut response = router::route(&req, &dir);
+                        let mut response = match panic::catch_unwind(AssertUnwindSafe(|| {
+                            router::route(&req, &dir)
+                        })) {
+                            Ok(resp) => resp,
+                            Err(_) => {
+                                eprintln!("handler panicked while processing {} {}", req.method, req.path); // server-side log only
+                                response::internal_server_error("Internal Server Error\n")
+                            }
+                        };
+
                         if should_close {
                             response = response::add_header(response, "Connection: close");
                         }
@@ -75,12 +119,25 @@ fn main() {
                         }
                     }
                 });
+
+                handles.push(handle);
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                // No incoming connection yet (expected, since listener is non-blocking).
+                // Avoid busy-spinning the CPU while polling.
+                thread::sleep(Duration::from_millis(100));
             }
             Err(e) => {
                 println!("error: {}", e);
             }
         }
     }
+
+    println!("Waiting for {} in-flight request(s) to finish...", handles.len());
+    for handle in handles {
+        let _ = handle.join();
+    }
+    println!("Shutdown complete.");
 }
 
 fn parse_directory_args() -> String {

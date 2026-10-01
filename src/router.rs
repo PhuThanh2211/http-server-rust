@@ -145,6 +145,7 @@ fn static_router() -> &'static Router {
         r.register("GET", "/api/users", handle_list_users);
         r.register("GET", "/user-agent", handle_ua_route);
         r.register("GET", "/search", handle_search);
+        r.register("GET", "/crash", |_req, _dir| panic!("simulated bug"));
 
         r.register_pattern("GET", "/users/{id}", handle_get_user);
         r.register_pattern("GET", "/users/{id}/posts/{post}", handle_get_post);
@@ -272,4 +273,53 @@ fn format_params(name: &str, params: &HashMap<String, String>) -> String {
         parts.push(format!("{}={}", k, params[k]));
     }
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::Request;
+    use std::collections::HashMap;
+
+    fn mock_request(method: &str, path: &str) -> Request {
+        Request {
+            method: method.to_string(),
+            path: path.to_string(),
+            version: "HTTP/1.1".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            query: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn exact_route_returns_200() {
+        let req = mock_request("GET", "/about");
+        let resp = route(&req, "");
+        assert!(String::from_utf8_lossy(&resp).starts_with("HTTP/1.1 200"));
+    }
+
+    #[test]
+    fn wrong_method_on_known_path_returns_405_with_allow() {
+        let req = mock_request("DELETE", "/about");
+        let resp = route(&req, "");
+        let text = String::from_utf8_lossy(&resp);
+        assert!(text.starts_with("HTTP/1.1 405"));
+        assert!(text.contains("Allow: GET"));
+    }
+
+    #[test]
+    fn unknown_path_returns_404() {
+        let req = mock_request("GET", "/nope");
+        let resp = route(&req, "");
+        assert!(String::from_utf8_lossy(&resp).starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
+    fn pattern_route_binds_params() {
+        let req = mock_request("GET", "/users/42");
+        let resp = route(&req, "");
+        let body = String::from_utf8_lossy(&resp);
+        assert!(body.contains("get_user id=42"));
+    }
 }

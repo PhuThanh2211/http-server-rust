@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 use std::io::Read;
 
+const MAX_REQUEST_LINE: usize = 8 * 1024;
+const MAX_HEADER_LINE: usize = 8 * 1024;
+const MAX_HEADER_COUNT: usize = 100;
+const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
 pub struct Request {
     pub method: String,
     pub path: String,
