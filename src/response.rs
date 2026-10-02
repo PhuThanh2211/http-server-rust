@@ -49,6 +49,11 @@ pub fn error(status_code: u16, reason: &str, body: &str, extra_headers: &[(&str,
     [head.into_bytes(), body.as_bytes().to_vec()].concat()
 }
 
+// 304 must repeat the ETag, have no body, and should not carry Content-Length.
+pub fn not_modified(etag: &str) -> Vec<u8> {
+    format!("HTTP/1.1 304 Not Modified\r\nETag: {}\r\n\r\n", etag).into_bytes()
+}
+
 // --- Convenience wrappers (client errors: 4xx) ---
 pub fn bad_request(msg: &str) -> Vec<u8> {
     error(400, "Bad Request", msg, &[])

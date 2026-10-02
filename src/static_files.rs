@@ -1,5 +1,6 @@
 use std::fs::canonicalize;
 use std::path::PathBuf;
+use sha1::{Digest, Sha1};
 
 // Posix-style lexical normalization: resolves "." and ".." segments without touching the filesystem
 fn normalize(path: &str) -> String {
@@ -69,6 +70,31 @@ pub fn resolve_on_disk(root: &str, request_path: &str) -> Option<PathBuf> {
         None
     }
 }
+
+/// Strong ETag: SHA-1 of the bytes, hex-encoded, wrapped in quotes (quotes are part of the ETag).
+pub fn etag_for(bytes: &[u8]) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(bytes);
+    format!("\"{}\"", hex::encode(hasher.finalize()))
+}
+
+fn strip_weak(tag: &str) -> &str {
+    let t = tag.trim();
+    t.strip_prefix("W/").unwrap_or(t)
+}
+
+pub fn should_return_304(resource_etag: &str, if_none_match: &str) -> bool {
+    let header = if_none_match.trim();
+    if header.is_empty() {
+        return false;
+    }
+    if header == "*" {
+        return true;
+    }
+    let current = strip_weak(resource_etag);
+    header.split(',').any(|candidate| strip_weak(candidate) == current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +121,33 @@ mod tests {
     #[test]
     fn unknown_extension_defaults_to_octet_stream() {
         assert_eq!(mime_type_for("/file.xyz"), "application/octet-stream");
+    }
+
+    #[test]
+    fn etag_is_quoted_and_deterministic() {
+        let a = etag_for(b"body{}");
+        assert!(a.starts_with('"') && a.ends_with('"'));
+        assert_eq!(a, etag_for(b"body{}"));
+    }
+
+    #[test]
+    fn etag_changes_when_content_changes() {
+        assert_ne!(etag_for(b"v1"), etag_for(b"v2"));
+    }
+
+    #[test]
+    fn etag_has_expected_sha1_length() {
+        // 40 hex chars + 2 quotes
+        assert_eq!(etag_for(b"x").len(), 42);
+    }
+
+    #[test]
+    fn conditional_rules() {
+        assert!(should_return_304("\"a1b2\"", "\"a1b2\""));
+        assert!(!should_return_304("\"a1b2\"", "\"different\""));
+        assert!(!should_return_304("\"a1b2\"", ""));
+        assert!(should_return_304("\"a1b2\"", "*"));
+        assert!(should_return_304("\"a1b2\"", "W/\"a1b2\""));
+        assert!(should_return_304("\"a1b2\"", "\"x\", \"y\", \"a1b2\""));
     }
 }

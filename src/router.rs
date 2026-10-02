@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::fs::{read, write};
-use std::io::Write;
-use std::path::Path;
 use std::sync::OnceLock;
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use crate::{request::Request, response};
+
+mod handlers;
+use handlers::{basic, files, users};
+
+#[cfg(test)]
+mod tests;
 
 use crate::static_files;
 
@@ -139,16 +140,16 @@ fn static_router() -> &'static Router {
     static ROUTER: OnceLock<Router> = OnceLock::new();
     ROUTER.get_or_init(|| {
         let mut r = Router::new();
-        r.register("GET", "/", handle_index);
-        r.register("GET", "/about", handle_about);
-        r.register("POST", "/login", handle_login);
-        r.register("GET", "/api/users", handle_list_users);
-        r.register("GET", "/user-agent", handle_ua_route);
-        r.register("GET", "/search", handle_search);
+        r.register("GET", "/", basic::index);
+        r.register("GET", "/about", basic::about);
+        r.register("POST", "/login", basic::login);
+        r.register("GET", "/api/users", basic::list_users);
+        r.register("GET", "/user-agent", basic::user_agent);
+        r.register("GET", "/search", users::search);
         r.register("GET", "/crash", |_req, _dir| panic!("simulated bug"));
 
-        r.register_pattern("GET", "/users/{id}", handle_get_user);
-        r.register_pattern("GET", "/users/{id}/posts/{post}", handle_get_post);
+        r.register_pattern("GET", "/users/{id}", users::get_user);
+        r.register_pattern("GET", "/users/{id}/posts/{post}", users::get_post);
         r
     })
 }
@@ -163,163 +164,14 @@ pub fn route(req: &Request, dir: &str) -> Vec<u8> {
 
 fn try_dynamic_routes(req: &Request, dir: &str) -> Option<Vec<u8>> {
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET" , p) if p.starts_with("/echo/") => Some(handle_echo(&p[6..], req)),
-        ("GET" , p) if p.starts_with("/files/") => Some(handle_get_file(&p[7..], dir)),
-        ("POST" , p) if p.starts_with("/files/") => Some(handle_post_file(&p[7..], dir,
+        ("GET" , p) if p.starts_with("/echo/") => Some(basic::echo(&p[6..], req)),
+        ("GET" , p) if p.starts_with("/files/") => Some(files::get(&p[7..], dir, req)),
+        ("POST" , p) if p.starts_with("/files/") => Some(files::post(&p[7..], dir,
                                                                           &req.body)),
         // Known path, wrong method → 405 with Allow header (not silently 404)
         (_, p) if p.starts_with("/files/") => Some(response::method_not_allowed(
             "This endpoint only supports GET and POST.\n", "GET, POST"
         )),
         _ => None,
-    }
-}
-
-fn handle_echo(text: &str, req: &Request) -> Vec<u8> {
-    let support_gzip = req.header("accept-encoding")
-        .map(|v| v.split(',').any(|s| s.trim() == "gzip"))
-        .unwrap_or(false);
-
-    if support_gzip {
-        let compressed = gzip_compress(text.as_bytes());
-        response::ok_with_encoding("text/plain", &compressed, Some("gzip"))
-    } else {
-        response::ok_with_encoding("text/plain", text.as_bytes(), None)
-    }
-}
-
-fn gzip_compress(data: &[u8]) -> Vec<u8> {
-    // Creates an in-memory gzip writer
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-
-    // Feeds the raw string bytes through the compressor
-    encoder.write_all(data).unwrap();
-
-    // Flushes and returns the complete gzip byte stream (header + compressed data + checksum/trailer)
-    encoder.finish().unwrap()
-}
-
-fn handle_index(_req: &Request, _dir: &str) -> Vec<u8> {
-    response::ok("text/plain", b"index")
-}
-
-fn handle_about(_req: &Request, _dir: &str) -> Vec<u8> {
-    response::ok("text/plain", b"about")
-}
-
-fn handle_login(_req: &Request, _dir: &str) -> Vec<u8> {
-    response::ok("text/plain", b"login")
-}
-
-fn handle_list_users(_req: &Request, _dir: &str) -> Vec<u8> {
-    response::ok("text/plain", b"list_users")
-}
-
-fn handle_ua_route(req: &Request, _dir: &str) -> Vec<u8> {
-    let ua = req.header("user-agent").unwrap_or("");
-    response::ok("text/plain", ua.as_bytes())
-}
-
-fn handle_get_file(filename: &str, dir: &str) -> Vec<u8> {
-    match static_files::resolve_on_disk(dir, filename) {
-        Some(path) => match read(&path) {
-            Ok(contents) => {
-                let mime = static_files::mime_type_for(filename);
-                response::ok(mime, &contents)
-            }
-            Err(_) => response::not_found("The requested file does not exist.\n"),
-        }
-        None => response::forbidden("Path escapes the allowed directory.\n"),
-    }
-
-}
-
-fn handle_post_file(filename: &str, dir: &str, body: &[u8]) -> Vec<u8> {
-    // For a new file, its parent must still resolve safely even though the file itself
-    // doesn't exist yet — resolve_safe_path (lexical) covers this; resolve_on_disk would
-    // fail since canonicalize requires the file to exist.
-    match static_files::resolve_safe_path(dir, filename) {
-        Some(path) => match write(&path, body) {
-            Ok(_) => response::created(),
-            Err(_) => response::internal_server_error("Failed to write file.\n"),
-        }
-        None => response::forbidden("Path escapes the allowed directory.\n"),
-    }
-}
-
-fn handle_get_user(_req: &Request, _dir: &str, params: &HashMap<String, String>) -> Vec<u8> {
-    response::ok("text/plain", format_params("get_user", params).as_bytes())
-}
-
-fn handle_get_post(_req: &Request, _dir: &str, params: &HashMap<String, String>) -> Vec<u8> {
-    response::ok("text/plain", format_params("get_post", params).as_bytes())
-}
-
-fn handle_search(req: &Request, _dir: &str) -> Vec<u8> {
-    let mut parts = vec!["search".to_string()];
-
-    for (k, v) in &req.query {
-        parts.push(format!("{}={}", k, v));
-    }
-
-    response::ok("text/plain", parts.join(" ").as_bytes())
-}
-fn format_params(name: &str, params: &HashMap<String, String>) -> String {
-    let mut keys: Vec<&String> = params.keys().collect();
-    keys.sort();
-    let mut parts = vec![name.to_string()];
-
-    for k in keys {
-        parts.push(format!("{}={}", k, params[k]));
-    }
-    parts.join(" ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::request::Request;
-    use std::collections::HashMap;
-
-    fn mock_request(method: &str, path: &str) -> Request {
-        Request {
-            method: method.to_string(),
-            path: path.to_string(),
-            version: "HTTP/1.1".to_string(),
-            headers: HashMap::new(),
-            body: Vec::new(),
-            query: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn exact_route_returns_200() {
-        let req = mock_request("GET", "/about");
-        let resp = route(&req, "");
-        assert!(String::from_utf8_lossy(&resp).starts_with("HTTP/1.1 200"));
-    }
-
-    #[test]
-    fn wrong_method_on_known_path_returns_405_with_allow() {
-        let req = mock_request("DELETE", "/about");
-        let resp = route(&req, "");
-        let text = String::from_utf8_lossy(&resp);
-        assert!(text.starts_with("HTTP/1.1 405"));
-        assert!(text.contains("Allow: GET"));
-    }
-
-    #[test]
-    fn unknown_path_returns_404() {
-        let req = mock_request("GET", "/nope");
-        let resp = route(&req, "");
-        assert!(String::from_utf8_lossy(&resp).starts_with("HTTP/1.1 404"));
-    }
-
-    #[test]
-    fn pattern_route_binds_params() {
-        let req = mock_request("GET", "/users/42");
-        let resp = route(&req, "");
-        let body = String::from_utf8_lossy(&resp);
-        assert!(body.contains("get_user id=42"));
     }
 }

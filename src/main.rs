@@ -3,6 +3,8 @@ mod response;
 mod router;
 mod logging;
 mod static_files;
+#[cfg(test)]
+mod test_utils;
 
 use std::io::{ErrorKind, Write};
 #[allow(unused_imports)]

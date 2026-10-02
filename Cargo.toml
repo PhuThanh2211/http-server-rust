@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Codecrafters <hello@codecrafters.io>"]
 edition = "2024"
 rust-version = "1.96"
+default-run = "codecrafters-http-server"
 
 [dependencies]
 anyhow = "1.0.68"                                # error handling
@@ -12,3 +13,5 @@ thiserror = "1.0.38"                             # error handling
 flate2 = "1.0"
 chrono= "0.4"
 ctrlc = "3.4"
+sha1 = "0.10"
+hex = "0.4"
