@@ -5,6 +5,9 @@ mod logging;
 mod static_files;
 #[cfg(test)]
 mod test_utils;
+mod range;
+mod vhost;
+mod websocket;
 
 use std::io::{ErrorKind, Write};
 #[allow(unused_imports)]
@@ -27,6 +30,7 @@ fn main() {
     listener.set_nonblocking(true).unwrap();
 
     let directory = parse_directory_args();
+    let vhosts = Arc::new(parse_vhost_args());
 
     // Shared flag: false = running normally, true = shutting down.
     let shutting_down = Arc::new(AtomicBool::new(false));
@@ -59,6 +63,7 @@ fn main() {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
 
                 let dir = directory.clone();
+                let vhosts = vhosts.clone();
                 let peer_ip = stream.peer_addr()
                     .map(|a| a.ip().to_string())
                     .unwrap_or_else(|_| "-".to_string());
@@ -77,7 +82,7 @@ fn main() {
                             .unwrap_or(false);
 
                         let mut response = match panic::catch_unwind(AssertUnwindSafe(|| {
-                            router::route(&req, &dir)
+                            router::route_vhost(&req, &dir, &vhosts)
                         })) {
                             Ok(resp) => resp,
                             Err(_) => {
@@ -112,6 +117,12 @@ fn main() {
                         }
 
                         let _ = stream.flush();
+
+                        if status == 101 {
+                            // The socket now carries WebSocket frames, not HTTP. Frame handling is the
+                            // next stage, so for now the handshake is the end of this connection.
+                            break;
+                        }
 
                         if should_close {
                             // explicitly closes both read/write halves of the TCP connection immediately
@@ -148,4 +159,19 @@ fn parse_directory_args() -> String {
         .and_then(|i| args.get(i + 1))
         .cloned()
         .unwrap_or_default()
+}
+
+fn parse_vhost_args() -> vhost::VHosts {
+    let args: Vec<String> = env::args().collect();
+    let mut table = vhost::VHosts::new();
+    for (i, a) in args.iter().enumerate() {
+        if a == "--vhost" {
+            if let Some((pattern, root)) = args.get(i + 1)
+                .and_then(|s| s.split_once('=')) {
+                table.add(pattern, root);
+            }
+        }
+    }
+
+    table
 }

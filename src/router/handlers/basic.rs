@@ -36,6 +36,19 @@ pub(crate) fn echo(text: &str, req: &Request) -> Vec<u8> {
         response::ok_with_encoding("text/plain", text.as_bytes(), None)
     }
 }
+pub fn websocket(req: &Request, _dir: &str) -> Vec<u8> {
+    match crate::websocket::validate_handshake(
+        &req.method,
+        req.header("upgrade").unwrap_or(""),
+        req.header("connection").unwrap_or(""),
+        req.header("sec-websocket-key").unwrap_or(""),
+        req.header("sec-websocket-version").unwrap_or(""),
+    ) {
+        Some(accept) => response::switching_protocols(&accept),
+        None => response::bad_request("Invalid WebSocket handshake.\n"),
+    }
+}
+
 fn gzip_compress(data: &[u8]) -> Vec<u8> {
     // Creates an in-memory gzip writer
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());

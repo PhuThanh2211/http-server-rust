@@ -53,21 +53,21 @@ pub fn resolve_safe_path(root: &str, request_path: &str) -> Option<String> {
 }
 
 pub fn resolve_on_disk(root: &str, request_path: &str) -> Option<PathBuf> {
-    let lexical = resolve_safe_path(root, request_path)?;
+    // 1. Lexical check on the REQUEST path only, against a fake POSIX root.
+    //    Rejects ".." climbs without ever touching a Windows path.
+    let safe = resolve_safe_path("/root", request_path)?;
+    let relative = safe.trim_start_matches("/root").trim_start_matches('/');
 
+    // 2. Join onto the real root using Path, which understands both separators.
     let canonical_root = canonicalize(root).ok()?;
-    let candidate = PathBuf::from(&lexical);
-    let parent = candidate.parent()?;
-    let file_name = candidate.file_name()?;
+    let candidate = canonical_root.join(relative);
 
-    let canonical_parent = canonicalize(parent).ok()
-        .unwrap_or_else(|| parent.to_path_buf());
-    let canonical_candidate = canonical_parent.join(file_name);
-
-    if canonical_candidate.starts_with(&canonical_root) {
-        Some(canonical_candidate)
-    } else {
-        None
+    // 3. If the file exists, resolve symlinks and re-check containment.
+    //    Both values come from canonicalize, so they share the same prefix.
+    match canonicalize(&candidate) {
+        Ok(real) if real.starts_with(&canonical_root) => Some(real),
+        Ok(_) => None,                 // a symlink pointed outside root
+        Err(_) => Some(candidate),     // doesn't exist yet (POST, or a 404 on GET)
     }
 }
 

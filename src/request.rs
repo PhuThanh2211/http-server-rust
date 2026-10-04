@@ -13,6 +13,7 @@ pub struct Request {
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
     pub query: Vec<(String, String)>, // preserves original left-to-right order; duplicates allowed
+    pub host_count: usize, // number of Host headers seen; the HashMap can't show duplicate
 }
 
 impl Request {
@@ -59,15 +60,18 @@ pub fn parse_request<T: Read>(stream: &mut T) -> Option<Request> {
 
     // 3. Parse headers into a HashMap (lowercase keys for case-insensitivity)
     let mut headers = HashMap::new();
+    let mut host_count = 0;
     for line in head_str.lines().skip(1) {
         if line.is_empty() {
             break; // blank line marks end of headers
         }
         if let Some((key, value)) = line.split_once(':') {
-            headers.insert(
-                key.trim().to_ascii_lowercase(),
-                value.trim().to_string()
-            );
+            let key = key.trim().to_ascii_lowercase();
+            if key == "host" {
+                host_count += 1;
+            }
+
+            headers.insert(key, value.trim().to_string());
         }
     }
 
@@ -91,7 +95,7 @@ pub fn parse_request<T: Read>(stream: &mut T) -> Option<Request> {
     }
 
     Some(Request {
-        method, path, version, headers, body, query
+        method, path, version, headers, body, query, host_count
     })
 }
 

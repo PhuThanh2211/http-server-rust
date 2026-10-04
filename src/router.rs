@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use crate::{request::Request, response};
+use crate::vhost::{Resolved, VHosts};
 
 mod handlers;
 use handlers::{basic, files, users};
@@ -147,11 +148,29 @@ fn static_router() -> &'static Router {
         r.register("GET", "/user-agent", basic::user_agent);
         r.register("GET", "/search", users::search);
         r.register("GET", "/crash", |_req, _dir| panic!("simulated bug"));
+        r.register("GET", "/chat", basic::websocket);
 
         r.register_pattern("GET", "/users/{id}", users::get_user);
         r.register_pattern("GET", "/users/{id}/posts/{post}", users::get_post);
         r
     })
+}
+
+pub fn route_vhost(req: &Request, default_dir: &str, vhosts: &VHosts) -> Vec<u8> {
+    if vhosts.is_empty() {
+        return route(req, default_dir);
+    }
+
+    // HTTP/1.1 requires exactly one Host. Duplicates may be a smuggling attempt.
+    if req.version == "HTTP/1.1" && req.host_count != 1 {
+        return response::bad_request("Exactly one Host header is required.\n");
+    }
+
+    match vhosts.resolve(req.header("host").unwrap_or("")) {
+        Resolved::Site(root) => route(req,root),
+        Resolved::BadRequest => response::bad_request("Missing or empty Host header.\n"),
+        Resolved::NotFound => response::not_found("Unknown host.\n"),
+    }
 }
 
 pub fn route(req: &Request, dir: &str) -> Vec<u8> {

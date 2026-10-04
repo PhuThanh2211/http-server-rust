@@ -103,3 +103,27 @@ pub fn gateway_timeout(msg: &str) -> Vec<u8> {
 }
 
 pub fn created() -> Vec<u8> { b"HTTP/1.1 201 Created\r\n\r\n".to_vec() }
+
+pub fn partial_content(
+    content_type: &str, body: &[u8], start: u64, end: u64, total: u64, etag: &str,
+) -> Vec<u8> {
+    let head = format!(
+        "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: {}\r\n\r\n",
+        content_type, start, end, total, body.len(), etag
+    );
+    [head.into_bytes(), body.to_vec()].concat()
+}
+
+// 416 must carry "bytes */size" so the client learns the real size.
+pub fn range_not_satisfiable(size: u64) -> Vec<u8> {
+    let content_range = format!("bytes */{}", size);
+    error(416, "Range Not Satisfiable", "Requested range not satisfiable.\n",
+          &[("Content-Range", &content_range)])
+}
+
+pub fn switching_protocols(accept: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+        accept
+    ).into_bytes()
+}
